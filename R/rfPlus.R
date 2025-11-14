@@ -6,7 +6,7 @@ rf <- function(formula = NULL, data = NULL,
   using_formula <- !is.null(formula)
   using_xy <- !is.null(x) && !is.null(y)
   if ((using_formula + using_xy) != 1L) {
-    stop("Use either model formula with the data OR x and y (but not both).")
+    stop("se either model formula with the data OR x and y (but not both).")
   }
 
   if (using_formula) {
