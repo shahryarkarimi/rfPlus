@@ -1,4 +1,4 @@
-#' @importFrom randomForest randomForest
+#' @import randomForest
 
 rf <- function(formula = NULL, data = NULL,
                x = NULL, y = NULL, ...) {
