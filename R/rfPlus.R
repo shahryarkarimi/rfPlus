@@ -228,9 +228,8 @@ build_Psi.treePlus <- function(treePlus, data) {
   Psi
 }
 
-#  Task for Shahryar
-build_Psi.RftPlus <- function(x, data, idx = NULL, ...) {
-  RftPlus_obj <- x
+# Task for Shahryar
+build_Psi.RftPlus <- function(RftPlus_obj, data, idx = NULL, ...) {
 
   data <- as.data.frame(data)
   n <- nrow(data)
@@ -239,7 +238,6 @@ build_Psi.RftPlus <- function(x, data, idx = NULL, ...) {
     return(matrix(0.0, nrow = n, ncol = 0))
   }
 
-  # Optional: subset trees
   if (!is.null(idx)) {
     idx <- as.integer(idx)
     if (any(idx < 1L | idx > length(RftPlus_obj))) {
@@ -273,7 +271,7 @@ build_Psi.RftPlus <- function(x, data, idx = NULL, ...) {
   do.call(cbind, Psi_list)
 }
 
-
+# model
 rfPlus <- function(rf, X, y) {
   # weighted normal equations helper
   .normal_eqs <- function(X, y, w) {
@@ -283,7 +281,7 @@ rfPlus <- function(rf, X, y) {
     solve(XtW, XtWy)
   }
 
-  ## --- basic checks -------------------------------------------------------
+  # --- basic checks -------------------------------------------------------
   if (!inherits(rf, "randomForest"))
     stop("`rf` must be a randomForest object (e.g., created by rf()).")
 
@@ -306,15 +304,15 @@ rfPlus <- function(rf, X, y) {
   ntree <- rf$ntree
   coef_list <- vector("list", ntree)
 
-  rfPlus_trees <- getRfPlus(rf)
+  RfPlus_trees <- getRfPlus(rf)
 
-  if (!is.list(rfPlus_trees) || inherits(rfPlus_trees, "treePlus")) {
-    rfPlus_trees <- list(rfPlus_trees)
-    names(rfPlus_trees) <- paste0("tree_", seq_len(ntree))
+  if (!is.list(RfPlus_trees) || inherits(RfPlus_trees, "treePlus")) {
+    RfPlus_trees <- list(RfPlus_trees)
+    names(RfPlus_trees) <- paste0("tree_", seq_len(ntree))
   }
 
   for (k in seq_len(ntree)) {
-    tree_k <- rfPlus_trees[[k]]
+    tree_k <- RfPlus_trees[[k]]
 
     Psi <- build_Psi(tree_k, X)
 
@@ -341,44 +339,44 @@ rfPlus <- function(rf, X, y) {
       y             = y,
       ntree         = ntree,
       feature_names = colnames(X),
-      tree_info     = rfPlus_trees,
+      tree_info     = RfPlus_trees,
       coef_list     = coef_list,
       call          = match.call()
     ),
-    class = "RfPlus"
+    class = "rfPlus"
   )
 }
 
-print.RfPlus <- function(x, ...) {
+print.rfPlus <- function(rfPlus, ...) {
   cat("RfPlus model\n")
-  cat("number of trees:", x$ntree, "\n")
-  cat("features:", paste(x$feature_names, collapse = ", "), "\n")
-  invisible(x)
+  cat("number of trees:", rfPlus$ntree, "\n")
+  cat("features:", paste(rfPlus$feature_names, collapse = ", "), "\n")
+  invisible(rfPlus)
 }
 
-coef.RfPlus <- function(RfPlus, trees = NULL, ...) {
+coef.rfPlus <- function(rfPlus, trees = NULL, ...) {
   if (is.null(trees)) {
-    trees <- seq_len(RfPlus$ntree)
+    trees <- seq_len(rfPlus$ntree)
   } else {
     trees <- as.integer(trees)
-    if (any(trees < 1L | trees > RfPlus$ntree)) {
-      stop("`trees` must be between 1 and ", RfPlus$ntree, call. = FALSE)
+    if (any(trees < 1L | trees > rfPlus$ntree)) {
+      stop("`trees` must be between 1 and ", rfPlus$ntree, call. = FALSE)
     }
   }
-  RfPlus$coef_list[trees]
+  rfPlus$coef_list[trees]
 }
 
-predict.RfPlus <- function(RfPlus, newdata = NULL, trees = NULL, ...) {
-  if (is.null(newdata)) newdata <- RfPlus$X
+predict.rfPlus <- function(rfPlus, newdata = NULL, trees = NULL, ...) {
+  if (is.null(newdata)) newdata <- rfPlus$X
   newdata <- as.data.frame(newdata)
 
 
   if (is.null(trees)) {
-    trees <- seq_len(RfPlus$ntree)
+    trees <- seq_len(rfPlus$ntree)
   } else {
     trees <- as.integer(trees)
-    if (any(trees < 1L | trees > RfPlus$ntree)) {
-      stop("`trees` must be between 1 and ", RfPlus$ntree, call. = FALSE)
+    if (any(trees < 1L | trees > rfPlus$ntree)) {
+      stop("`trees` must be between 1 and ", rfPlus$ntree, call. = FALSE)
     }
   }
 
@@ -391,10 +389,10 @@ predict.RfPlus <- function(RfPlus, newdata = NULL, trees = NULL, ...) {
   for (j in seq_along(trees)) {
     k <- trees[j]
 
-    tree_k <- RfPlus$tree_info[[k]]
+    tree_k <- rfPlus$tree_info[[k]]
     Psi_k  <- build_Psi(tree_k, newdata)
 
-    coef_k <- RfPlus$coef_list[[k]]
+    coef_k <- rfPlus$coef_list[[k]]
 
     if (ncol(Psi_k) == 0L) {
       # intercept-only tree
