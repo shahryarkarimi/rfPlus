@@ -150,24 +150,24 @@ getTreePlus <- function(rf, k = 1, data = NULL) {
 getRfPlus <- function(rf, data = NULL, idx = NULL) {
 
   if (!inherits(rf, "randomForest"))
-    stop("rfpc(): rf must be a randomForest model created by rf().")
+    stop("getRfPlus(): rf must be a randomForest model created by rf().")
 
   all_ids <- seq_len(rf$ntree)
   if (is.null(idx)) idx <- all_ids else idx <- as.integer(idx)
   if (any(!(idx %in% all_ids)))
-    stop("rfpc(): idx must be in 1:", rf$ntree)
+    stop("getRfPlus(): idx must be in 1:", rf$ntree)
 
   if (is.null(data)) {
-    A <- perm_data(rf)
-    #A is either array or matrix
+    A <- perm_data(rf) # A is either an array or matrix
   } else {
     A <- data
   }
 
   out <- vector("list", length(idx))
 
-  for (j in 1:length(idx)) {
+  for (j in seq_along(idx)) {
     k <- idx[j]
+
     tree_k <- getTree(rf, k, labelVar = TRUE)
 
     if (is.matrix(A)) {
@@ -181,7 +181,12 @@ getRfPlus <- function(rf, data = NULL, idx = NULL) {
 
   names(out) <- paste0("tree_", idx)
 
-  if (length(out) == 1L) out[[1L]] else out
+  if (length(out) == 1L) {
+    return(out[[1L]])
+  } else {
+    class(out) <- "rftplus"
+    return(out)
+  }
 }
 
 build_Psi <- function(x, ...) {
