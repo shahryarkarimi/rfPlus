@@ -42,8 +42,8 @@ rf <- function(formula = NULL, data = NULL,
   rf
 }
 
-getTree <- function(rf, k = 1, labelVar = TRUE) {
-  tree <- randomForest::getTree(rf, k = k, labelVar = labelVar)
+getTreeLab <- function(rf, k = 1, labelVar = TRUE) {
+  tree <- getTree(rf, k = k, labelVar = labelVar)
   class(tree) <- c("tree", class(tree))
   tree
 }
@@ -137,17 +137,10 @@ tree2Plus <- function(tree, data) {
     }
   }
   class(treePlus) <- c("treePlus", class(tree))
-  treePlus
+  treePlus <- list(tree=treePlus, data=data)
 }
 
-getTreePlus <- function(rf, k = 1, data = NULL) {
-  tree <- getTree(rf, k = k)
-  if (is.null(data)) {data <- rf$training_data}
-  treePlus <- tree2Plus(tree, data)
-  treePlus
-}
-
-getRfPlus <- function(rf, data = NULL, idx = NULL) {
+getTreePlus <- function(rf, data = NULL, idx = NULL) {
 
   if (!inherits(rf, "randomForest"))
     stop("getRfPlus(): rf must be a randomForest model created by rf().")
@@ -168,7 +161,7 @@ getRfPlus <- function(rf, data = NULL, idx = NULL) {
   for (j in seq_along(idx)) {
     k <- idx[j]
 
-    tree_k <- getTree(rf, k, labelVar = TRUE)
+    tree_k <- getTreeLab(rf, k)
 
     if (is.matrix(A)) {
       Xk <- A
@@ -184,7 +177,7 @@ getRfPlus <- function(rf, data = NULL, idx = NULL) {
   if (length(out) == 1L) {
     return(out[[1L]])
   } else {
-    class(out) <- "RftPlus"
+    class(out) <- "treePlus"
     return(out)
   }
 }
