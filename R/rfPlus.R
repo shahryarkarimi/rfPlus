@@ -184,7 +184,7 @@ getRfPlus <- function(rf, data = NULL, idx = NULL) {
   if (length(out) == 1L) {
     return(out[[1L]])
   } else {
-    class(out) <- "rftplus"
+    class(out) <- "RftPlus"
     return(out)
   }
 }
@@ -230,6 +230,52 @@ build_Psi.treePlus <- function(treePlus, data) {
 
 #A Task for Shahryar
 #build_Psi.rfPlus <- function(rf, data = NULL, idx = NULL) {}
+build_Psi.RftPlus <- function(x, data, idx = NULL, ...) {
+  RftPlus_obj <- x
+
+  data <- as.data.frame(data)
+  n <- nrow(data)
+
+  if (!length(RftPlus_obj)) {
+    return(matrix(0.0, nrow = n, ncol = 0))
+  }
+
+  # Optional: subset trees
+  if (!is.null(idx)) {
+    idx <- as.integer(idx)
+    if (any(idx < 1L | idx > length(RftPlus_obj))) {
+      stop("`idx` must be between 1 and ", length(RftPlus_obj), call. = FALSE)
+    }
+    RftPlus_obj <- RftPlus_obj[idx]
+  }
+
+  Psi_list <- vector("list", length(RftPlus_obj))
+
+  for (j in seq_along(RftPlus_obj)) {
+    tree_j <- RftPlus_obj[[j]]
+
+    Psi_j  <- build_Psi(tree_j, data, ...)
+
+    if (!is.null(Psi_j) && ncol(Psi_j) > 0L) {
+      tree_name <- names(RftPlus_obj)[j]
+      if (is.null(tree_name) || tree_name == "") tree_name <- paste0("tree_", j)
+      colnames(Psi_j) <- paste0(tree_name, "_", colnames(Psi_j))
+      Psi_list[[j]] <- Psi_j
+    } else {
+      Psi_list[[j]] <- NULL
+    }
+  }
+
+  Psi_list <- Filter(Negate(is.null), Psi_list)
+  if (!length(Psi_list)) {
+    return(matrix(0.0, nrow = n, ncol = 0))
+  }
+
+  do.call(cbind, Psi_list)
+}
+
+
+
 
 rfPlus <- function(rf, X, y) {
   .normal_eqs <- function(X, y, w) {
