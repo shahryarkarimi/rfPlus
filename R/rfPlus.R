@@ -42,12 +42,6 @@ rf <- function(formula = NULL, data = NULL,
   rf
 }
 
-getTreeLab <- function(rf, k = 1, labelVar = TRUE) {
-  tree <- getTree(rf, k = k, labelVar = labelVar)
-  class(tree) <- c("tree", class(tree))
-  tree
-}
-
 perm_data <- function(rf, idx = NULL) {
   if (!inherits(rf, "randomForest")) stop("`rf` must be a randomForest object.")
   if (is.null(rf$training_data)) stop("`rf$training_data` missing. Fit the model with rf().")
@@ -161,7 +155,7 @@ getTreePlus <- function(rf, data = NULL, idx = NULL) {
   for (j in seq_along(idx)) {
     k <- idx[j]
 
-    tree_k <- getTreeLab(rf, k)
+    tree_k <- getTree(rf, k, labelVar = TRUE)
 
     if (is.matrix(A)) {
       Xk <- A
