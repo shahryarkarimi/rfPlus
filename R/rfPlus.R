@@ -228,8 +228,7 @@ build_Psi.treePlus <- function(treePlus, data) {
   Psi
 }
 
-#A Task for Shahryar
-#build_Psi.rfPlus <- function(rf, data = NULL, idx = NULL) {}
+#  Task for Shahryar
 build_Psi.RftPlus <- function(x, data, idx = NULL, ...) {
   RftPlus_obj <- x
 
@@ -275,38 +274,56 @@ build_Psi.RftPlus <- function(x, data, idx = NULL, ...) {
 }
 
 
-
-
 rfPlus <- function(rf, X, y) {
+  # weighted normal equations helper
   .normal_eqs <- function(X, y, w) {
     w <- as.numeric(w)
-    solve(t(X) %*% (X * w)) %*% (t(X) %*% (y * w))
+    XtW <- t(X) %*% (X * w)
+    XtWy <- t(X) %*% (y * w)
+    solve(XtW, XtWy)
   }
 
-  # --- checks ---
-  if (!inherits(rf, "randomForest")) stop("`rf` must be a randomForest object.")
+  ## --- basic checks -------------------------------------------------------
+  if (!inherits(rf, "randomForest"))
+    stop("`rf` must be a randomForest object (e.g., created by rf()).")
+
   if (!is.null(rf$type) && rf$type != "regression")
-    stop("This implementation supports regression RF only.")
-  if (is.null(rf$inbag)) stop("RF must be fit with keep.inbag = TRUE (use rf()).")
+    stop("This implementation supports regression random forests only.")
+
+  if (is.null(rf$inbag))
+    stop("`rf$inbag` is NULL. Fit the random forest with keep.inbag = TRUE (use rf()).")
 
   X <- as.data.frame(X)
-  if (length(y) != nrow(X)) stop("Length of y must match nrow(X).")
+  if (!is.numeric(y))
+    stop("`y` must be numeric for regression.")
+
+  if (length(y) != nrow(X))
+    stop("Length of y must match nrow(X).")
+
+  if (nrow(rf$inbag) != nrow(X))
+    stop("Number of rows in X must match number of rows used to fit `rf`.")
 
   ntree <- rf$ntree
-  tree_info <- vector("list", ntree)
   coef_list <- vector("list", ntree)
 
-  rfPlus.t <- getRfPlus(rf)
+  rfPlus_trees <- getRfPlus(rf)
+
+  if (!is.list(rfPlus_trees) || inherits(rfPlus_trees, "treePlus")) {
+    rfPlus_trees <- list(rfPlus_trees)
+    names(rfPlus_trees) <- paste0("tree_", seq_len(ntree))
+  }
 
   for (k in seq_len(ntree)) {
+    tree_k <- rfPlus_trees[[k]]
 
-    Psi <- build_Psi(rfPlus.t[[k]], X)
+    Psi <- build_Psi(tree_k, X)
 
     w <- rf$inbag[, k]
-    inbag <- w>0
+    inbag <- w > 0
 
     if (ncol(Psi) == 0L) {
-      # degenerate: intercept-only weighted mean on in-bag rows
+      if (!any(inbag))
+        stop("No in-bag observations for tree ", k, " (all zero in `rf$inbag`).")
       mu <- sum(w[inbag] * y[inbag]) / sum(w[inbag])
       coef_list[[k]] <- c(mu)
     } else {
@@ -317,19 +334,79 @@ rfPlus <- function(rf, X, y) {
     }
   }
 
-  structure(list(
-    rf            = rf,
-    X             = X,
-    y             = y,
-    ntree         = ntree,
-    feature_names = colnames(X),
-    tree_info     = rfPlus.t,
-    coef_list     = coef_list
-  ), class = "rfPlus")
+  structure(
+    list(
+      rf            = rf,
+      X             = X,
+      y             = y,
+      ntree         = ntree,
+      feature_names = colnames(X),
+      tree_info     = rfPlus_trees,
+      coef_list     = coef_list,
+      call          = match.call()
+    ),
+    class = "RfPlus"
+  )
 }
 
-print.rfPlus <- function(x, ...) {
-  cat("rfols model with", x$ntree, "trees\n")
-  cat("Features:", paste(x$feature_names, collapse = ", "), "\n")
+print.RfPlus <- function(x, ...) {
+  cat("RfPlus model\n")
+  cat("number of trees:", x$ntree, "\n")
+  cat("features:", paste(x$feature_names, collapse = ", "), "\n")
   invisible(x)
 }
+
+coef.RfPlus <- function(RfPlus, trees = NULL, ...) {
+  if (is.null(trees)) {
+    trees <- seq_len(RfPlus$ntree)
+  } else {
+    trees <- as.integer(trees)
+    if (any(trees < 1L | trees > RfPlus$ntree)) {
+      stop("`trees` must be between 1 and ", RfPlus$ntree, call. = FALSE)
+    }
+  }
+  RfPlus$coef_list[trees]
+}
+
+predict.RfPlus <- function(RfPlus, newdata = NULL, trees = NULL, ...) {
+  if (is.null(newdata)) newdata <- RfPlus$X
+  newdata <- as.data.frame(newdata)
+
+
+  if (is.null(trees)) {
+    trees <- seq_len(RfPlus$ntree)
+  } else {
+    trees <- as.integer(trees)
+    if (any(trees < 1L | trees > RfPlus$ntree)) {
+      stop("`trees` must be between 1 and ", RfPlus$ntree, call. = FALSE)
+    }
+  }
+
+  nt <- length(trees)
+  n  <- nrow(newdata)
+
+  # matrix of per-tree predictions
+  per_tree <- matrix(NA_real_, nrow = n, ncol = nt)
+
+  for (j in seq_along(trees)) {
+    k <- trees[j]
+
+    tree_k <- RfPlus$tree_info[[k]]
+    Psi_k  <- build_Psi(tree_k, newdata)
+
+    coef_k <- RfPlus$coef_list[[k]]
+
+    if (ncol(Psi_k) == 0L) {
+      # intercept-only tree
+      per_tree[, j] <- rep(coef_k[1L], n)
+    } else {
+      intercept <- coef_k[1L]
+      beta      <- coef_k[-1L]
+      per_tree[, j] <- as.numeric(intercept + Psi_k %*% beta)
+    }
+  }
+
+  rowMeans(per_tree)
+}
+
+
