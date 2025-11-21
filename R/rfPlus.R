@@ -117,11 +117,10 @@ tree2Plus <- function(tree, data) {
   Rs     <- as.integer(treePlus[["right daughter"]])
 
   for (nid in seq_len(J)) {
-    if (status[nid] == -1L) next  # skip leaves
+    if (status[nid] == -1L) next
     L <- Ls[nid]; R <- Rs[nid]
     if (is.na(L) || is.na(R) || L < 1L || R < 1L || L > J || R > J) next
 
-    # counts over bootstrapped rows (duplicates explicit)
     NL <- sum(memb[, L])
     NR <- sum(memb[, R])
 
@@ -130,19 +129,22 @@ tree2Plus <- function(tree, data) {
       treePlus$NR[nid] <- as.numeric(NR)
     }
   }
-  class(treePlus) <- c("treePlus", class(tree))
-  treePlus <- list(tree=treePlus, data=data)
+
+  treePlus <- list(tree = treePlus, data = data)
+  class(treePlus) <- c("treePlus", class(treePlus))
+
+  treePlus
 }
 
 getTreePlus <- function(rf, data = NULL, idx = NULL) {
 
   if (!inherits(rf, "randomForest"))
-    stop("getRfPlus(): rf must be a randomForest model created by rf().")
+    stop("getTreePlus(): rf must be a randomForest model created by rf().")
 
   all_ids <- seq_len(rf$ntree)
   if (is.null(idx)) idx <- all_ids else idx <- as.integer(idx)
   if (any(!(idx %in% all_ids)))
-    stop("getRfPlus(): idx must be in 1:", rf$ntree)
+    stop("getTreePlus(): idx must be in 1:", rf$ntree)
 
   if (is.null(data)) {
     A <- perm_data(rf) # A is either an array or matrix
@@ -176,75 +178,87 @@ getTreePlus <- function(rf, data = NULL, idx = NULL) {
   }
 }
 
-build_Psi <- function(x, ...) {
-  UseMethod("build_Psi")
+
+getPsi <- function(x, ...) {
+  UseMethod("getPsi")
 }
 
-build_Psi.treePlus <- function(treePlus, data) {
+getPsi.treePlus <- function(tp, data = NULL, idx = NULL, ...) {
+
+  # single treePlus object
+  if (!is.null(tp$tree) && !is.null(tp$data)) {
+
+    tree_df <- tp$tree
+
+
+    if (is.null(data)) {
+      data <- tp$data
+    }
+    data <- as.data.frame(data)
+    n    <- nrow(data)
+
+    memb <- node_memberships(tree_df, data)
+
+    is_internal <- as.integer(tree_df[["status"]]) != -1L
+    has_counts  <- !is.na(tree_df$NL) & !is.na(tree_df$NR)
+    sel         <- which(is_internal & has_counts)
+
+    if (length(sel) == 0L) {
+      return(matrix(0.0, nrow = n, ncol = 0))
+    }
+
+    L  <- as.integer(tree_df[["left daughter"]][sel])
+    R  <- as.integer(tree_df[["right daughter"]][sel])
+    NL <- as.numeric(tree_df$NL[sel])
+    NR <- as.numeric(tree_df$NR[sel])
+
+    S   <- length(sel)
+    Psi <- matrix(0.0, nrow = n, ncol = S)
+
+    for (j in seq_len(S)) {
+      denom <- sqrt(NL[j] * NR[j])
+      if (!is.finite(denom) || denom == 0) next
+      Psi[memb[, L[j]], j] <-  NR[j] / denom
+      Psi[memb[, R[j]], j] <- -NL[j] / denom
+    }
+
+    colnames(Psi) <- paste0("s", seq_len(ncol(Psi)))
+    return(Psi)
+  }
+
+  # list of treePlus objects
+  tp_list <- tp
+
+  if (is.null(data)) {
+    stop("When `x` is a list of treePlus objects, you must supply `data`.")
+  }
   data <- as.data.frame(data)
-  n <- nrow(data)
+  n    <- nrow(data)
 
-  memb <- node_memberships(treePlus, data)
-
-
-  is_internal <- as.integer(treePlus[["status"]]) != -1L
-  has_counts  <- !is.na(treePlus$NL) & !is.na(treePlus$NR)
-  idx <- which(is_internal & has_counts)
-
-  if (length(idx) == 0L) {
+  if (!length(tp_list)) {
     return(matrix(0.0, nrow = n, ncol = 0))
   }
 
-  # Children and counts for the selected splits
-  L  <- as.integer(treePlus[["left daughter"]][idx])
-  R  <- as.integer(treePlus[["right daughter"]][idx])
-  NL <- as.numeric(treePlus$NL[idx])
-  NR <- as.numeric(treePlus$NR[idx])
-
-  S <- length(idx)
-  Psi <- matrix(0.0, nrow = n, ncol = S)
-
-  for (j in seq_len(S)) {
-    denom <- sqrt(NL[j] * NR[j])
-    if (!is.finite(denom) || denom == 0) next
-    Psi[memb[, L[j]], j] <-  NR[j] / denom   # + on left child
-    Psi[memb[, R[j]], j] <- -NL[j] / denom   # - on right child
-  }
-
-  colnames(Psi) <- paste0("s", seq_len(ncol(Psi)))
-  Psi
-}
-
-# Task for Shahryar
-build_Psi.RftPlus <- function(RftPlus_obj, data, idx = NULL, ...) {
-
-  data <- as.data.frame(data)
-  n <- nrow(data)
-
-  if (!length(RftPlus_obj)) {
-    return(matrix(0.0, nrow = n, ncol = 0))
-  }
 
   if (!is.null(idx)) {
     idx <- as.integer(idx)
-    if (any(idx < 1L | idx > length(RftPlus_obj))) {
-      stop("`idx` must be between 1 and ", length(RftPlus_obj), call. = FALSE)
+    if (any(idx < 1L | idx > length(tp_list))) {
+      stop("`idx` must be between 1 and ", length(tp_list), call. = FALSE)
     }
-    RftPlus_obj <- RftPlus_obj[idx]
+    tp_list <- tp_list[idx]
   }
 
-  Psi_list <- vector("list", length(RftPlus_obj))
+  Psi_list <- vector("list", length(tp_list))
 
-  for (j in seq_along(RftPlus_obj)) {
-    tree_j <- RftPlus_obj[[j]]
-
-    Psi_j  <- build_Psi(tree_j, data, ...)
+  for (j in seq_along(tp_list)) {
+    tp_j  <- tp_list[[j]]
+    Psi_j <- getPsi(tp_j, data = data, ...)
 
     if (!is.null(Psi_j) && ncol(Psi_j) > 0L) {
-      tree_name <- names(RftPlus_obj)[j]
+      tree_name <- names(tp_list)[j]
       if (is.null(tree_name) || tree_name == "") tree_name <- paste0("tree_", j)
       colnames(Psi_j) <- paste0(tree_name, "_", colnames(Psi_j))
-      Psi_list[[j]] <- Psi_j
+      Psi_list[[j]]   <- Psi_j
     } else {
       Psi_list[[j]] <- NULL
     }
@@ -258,12 +272,28 @@ build_Psi.RftPlus <- function(RftPlus_obj, data, idx = NULL, ...) {
   do.call(cbind, Psi_list)
 }
 
+getPsi.rf <- function(rf, data = NULL, idx = NULL, ...) {
+
+  if (is.null(data)) {
+    if (is.null(rf$training_data)) {
+      stop("`data` is NULL and `rf$training_data` is missing. ",
+           "Fit the model with rf() or supply `data`.", call. = FALSE)
+    }
+    data <- rf$training_data
+  }
+
+  tp <- getTreePlus(rf, idx = idx)
+
+  getPsi(tp, data = data, ...)
+}
+
+
 # model
 rfPlus <- function(rf, X, y) {
   # weighted normal equations helper
   .normal_eqs <- function(X, y, w) {
     w <- as.numeric(w)
-    XtW <- t(X) %*% (X * w)
+    XtW  <- t(X) %*% (X * w)
     XtWy <- t(X) %*% (y * w)
     solve(XtW, XtWy)
   }
@@ -291,28 +321,39 @@ rfPlus <- function(rf, X, y) {
   ntree <- rf$ntree
   coef_list <- vector("list", ntree)
 
-  RfPlus_trees <- getRfPlus(rf)
+  # --- get treePlus objects for all trees ---------------------------------
+  tp_obj <- getTreePlus(rf)  # all trees by default
 
-  if (!is.list(RfPlus_trees) || inherits(RfPlus_trees, "treePlus")) {
-    RfPlus_trees <- list(RfPlus_trees)
-    names(RfPlus_trees) <- paste0("tree_", seq_len(ntree))
+  # Ensure we always work with a list of treePlus objects
+  if (!is.null(tp_obj$tree) && !is.null(tp_obj$data)) {
+    # single treePlus object
+    tp_list <- list(tp_obj)
+    names(tp_list) <- "tree_1"
+  } else {
+    # already a list of treePlus objects
+    tp_list <- tp_obj
   }
 
+  # --- per-tree OLS -------------------------------------------------------
   for (k in seq_len(ntree)) {
-    tree_k <- RfPlus_trees[[k]]
+    tp_k <- tp_list[[k]]
 
-    Psi <- build_Psi(tree_k, X)
+    # Psi for tree k on the training X
+    Psi_k <- getPsi(tp_k, data = X)
+
 
     w <- rf$inbag[, k]
     inbag <- w > 0
 
-    if (ncol(Psi) == 0L) {
+    if (ncol(Psi_k) == 0L) {
+
       if (!any(inbag))
         stop("No in-bag observations for tree ", k, " (all zero in `rf$inbag`).")
+
       mu <- sum(w[inbag] * y[inbag]) / sum(w[inbag])
       coef_list[[k]] <- c(mu)
     } else {
-      Xd <- cbind(Intercept = 1, Psi)[inbag, , drop = FALSE]
+      Xd <- cbind(Intercept = 1, Psi_k)[inbag, , drop = FALSE]
       yd <- y[inbag]
       wd <- w[inbag]
       coef_list[[k]] <- as.vector(.normal_eqs(Xd, yd, wd))
@@ -326,13 +367,14 @@ rfPlus <- function(rf, X, y) {
       y             = y,
       ntree         = ntree,
       feature_names = colnames(X),
-      tree_info     = RfPlus_trees,
+      tree_info     = tp_list,
       coef_list     = coef_list,
       call          = match.call()
     ),
     class = "rfPlus"
   )
 }
+
 
 print.rfPlus <- function(rfPlus, ...) {
   cat("RfPlus model\n")
@@ -354,9 +396,9 @@ coef.rfPlus <- function(rfPlus, trees = NULL, ...) {
 }
 
 predict.rfPlus <- function(rfPlus, newdata = NULL, trees = NULL, ...) {
+
   if (is.null(newdata)) newdata <- rfPlus$X
   newdata <- as.data.frame(newdata)
-
 
   if (is.null(trees)) {
     trees <- seq_len(rfPlus$ntree)
@@ -370,19 +412,19 @@ predict.rfPlus <- function(rfPlus, newdata = NULL, trees = NULL, ...) {
   nt <- length(trees)
   n  <- nrow(newdata)
 
-  # matrix of per-tree predictions
   per_tree <- matrix(NA_real_, nrow = n, ncol = nt)
 
   for (j in seq_along(trees)) {
     k <- trees[j]
 
     tree_k <- rfPlus$tree_info[[k]]
-    Psi_k  <- build_Psi(tree_k, newdata)
+
+    # updated: use getPsi(), not build_Psi()
+    Psi_k <- getPsi(tree_k, data = newdata)
 
     coef_k <- rfPlus$coef_list[[k]]
 
     if (ncol(Psi_k) == 0L) {
-      # intercept-only tree
       per_tree[, j] <- rep(coef_k[1L], n)
     } else {
       intercept <- coef_k[1L]
@@ -393,5 +435,3 @@ predict.rfPlus <- function(rfPlus, newdata = NULL, trees = NULL, ...) {
 
   rowMeans(per_tree)
 }
-
-
