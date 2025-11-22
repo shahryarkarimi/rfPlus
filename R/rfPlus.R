@@ -1,5 +1,4 @@
-#' @import randomForest
-
+#' @export
 rf <- function(formula = NULL, data = NULL,
                x = NULL, y = NULL, ...) {
 
@@ -104,6 +103,7 @@ node_memberships <- function(tree, data) {
   memb
 }
 
+#' @export
 tree2Plus <- function(tree, data) {
   J <- nrow(tree)
   memb <- node_memberships(tree, data)
@@ -136,15 +136,65 @@ tree2Plus <- function(tree, data) {
   treePlus
 }
 
-getTreePlus <- function(rf, data = NULL, idx = NULL) {
+#' @export
+get.Tree <- function(x, ...) {
+  UseMethod("get.Tree")
+}
+
+#' @export
+get.TreePlus <- function(x, ...) {
+  UseMethod("get.TreePlus")
+}
+
+#' @export
+#' @method get.Tree rf
+get.Tree.rf <- function (rfobj, k = 1, labelVar = TRUE) {
+  if (is.null(rfobj$forest)) {
+    stop("No forest component in ", deparse(substitute(rfobj)))
+  }
+  if (k > rfobj$ntree) {
+    stop("There are fewer than ", k, "trees in the forest")
+  }
+  if (rfobj$type == "regression") {
+    tree <- cbind(rfobj$forest$leftDaughter[, k], rfobj$forest$rightDaughter[,
+                                                                             k], rfobj$forest$bestvar[, k], rfobj$forest$xbestsplit[,
+                                                                                                                                    k], rfobj$forest$nodestatus[, k], rfobj$forest$nodepred[,
+                                                                                                                                                                                            k])[1:rfobj$forest$ndbigtree[k], ]
+  }
+  else {
+    tree <- cbind(rfobj$forest$treemap[, , k], rfobj$forest$bestvar[,
+                                                                    k], rfobj$forest$xbestsplit[, k], rfobj$forest$nodestatus[,
+                                                                                                                              k], rfobj$forest$nodepred[, k])[1:rfobj$forest$ndbigtree[k],
+                                                                                                                              ]
+  }
+  dimnames(tree) <- list(1:nrow(tree), c("left daughter",
+                                         "right daughter", "split var", "split point", "status",
+                                         "prediction"))
+  if (labelVar) {
+    tree <- as.data.frame(tree)
+    v <- tree[[3]]
+    v[v == 0] <- NA
+    tree[[3]] <- factor(rownames(rfobj$importance)[v])
+    if (rfobj$type == "classification") {
+      v <- tree[[6]]
+      v[!v %in% 1:nlevels(rfobj$y)] <- NA
+      tree[[6]] <- levels(rfobj$y)[v]
+    }
+  }
+  tree
+}
+
+#' @export
+#' @method get.TreePlus rf
+get.TreePlus.rf <- function(rf, data = NULL, idx = NULL) {
 
   if (!inherits(rf, "randomForest"))
-    stop("getTreePlus(): rf must be a randomForest model created by rf().")
+    stop("get.TreePlus(): rf must be a randomForest model created by rf().")
 
   all_ids <- seq_len(rf$ntree)
   if (is.null(idx)) idx <- all_ids else idx <- as.integer(idx)
   if (any(!(idx %in% all_ids)))
-    stop("getTreePlus(): idx must be in 1:", rf$ntree)
+    stop("get.TreePlus(): idx must be in 1:", rf$ntree)
 
   if (is.null(data)) {
     A <- perm_data(rf) # A is either an array or matrix
@@ -157,7 +207,7 @@ getTreePlus <- function(rf, data = NULL, idx = NULL) {
   for (j in seq_along(idx)) {
     k <- idx[j]
 
-    tree_k <- getTree(rf, k, labelVar = TRUE)
+    tree_k <- get.Tree(rf, k, labelVar = TRUE)
 
     if (is.matrix(A)) {
       Xk <- A
@@ -178,11 +228,13 @@ getTreePlus <- function(rf, data = NULL, idx = NULL) {
   }
 }
 
-
+#' @export
 getPsi <- function(x, ...) {
   UseMethod("getPsi")
 }
 
+#' @export
+#' @method getPsi treePlus
 getPsi.treePlus <- function(tp, data = NULL, idx = NULL, ...) {
 
   # single treePlus object
@@ -272,6 +324,8 @@ getPsi.treePlus <- function(tp, data = NULL, idx = NULL, ...) {
   do.call(cbind, Psi_list)
 }
 
+#' @export
+#' @method getPsi rf
 getPsi.rf <- function(rf, data = NULL, idx = NULL, ...) {
 
   if (is.null(data)) {
@@ -282,13 +336,13 @@ getPsi.rf <- function(rf, data = NULL, idx = NULL, ...) {
     data <- rf$training_data
   }
 
-  tp <- getTreePlus(rf, idx = idx)
+  tp <- get.TreePlus(rf, idx = idx)
 
   getPsi(tp, data = data, ...)
 }
 
-
 # model
+#' @export
 rfPlus <- function(rf, X, y) {
   # weighted normal equations helper
   .normal_eqs <- function(X, y, w) {
@@ -322,7 +376,7 @@ rfPlus <- function(rf, X, y) {
   coef_list <- vector("list", ntree)
 
   # --- get treePlus objects for all trees ---------------------------------
-  tp_obj <- getTreePlus(rf)  # all trees by default
+  tp_obj <- get.TreePlus(rf)  # all trees by default
 
   # Ensure we always work with a list of treePlus objects
   if (!is.null(tp_obj$tree) && !is.null(tp_obj$data)) {
@@ -375,7 +429,7 @@ rfPlus <- function(rf, X, y) {
   )
 }
 
-
+#' @export
 print.rfPlus <- function(rfPlus, ...) {
   cat("RfPlus model\n")
   cat("number of trees:", rfPlus$ntree, "\n")
@@ -383,6 +437,7 @@ print.rfPlus <- function(rfPlus, ...) {
   invisible(rfPlus)
 }
 
+#' @export
 coef.rfPlus <- function(rfPlus, trees = NULL, ...) {
   if (is.null(trees)) {
     trees <- seq_len(rfPlus$ntree)
@@ -395,6 +450,7 @@ coef.rfPlus <- function(rfPlus, trees = NULL, ...) {
   rfPlus$coef_list[trees]
 }
 
+#' @export
 predict.rfPlus <- function(rfPlus, newdata = NULL, trees = NULL, ...) {
 
   if (is.null(newdata)) newdata <- rfPlus$X
