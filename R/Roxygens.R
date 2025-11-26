@@ -1,2 +1,2 @@
-#' @importFrom randomForest getTree randomForest
+#' @importFrom randomForest randomForest getTree
 NULL
