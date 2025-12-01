@@ -137,18 +137,18 @@ tree2Plus <- function(tree, data) {
 }
 
 #' @export
-get.Tree <- function(x, ...) {
-  UseMethod("get.Tree")
+getTree <- function(x, ...) {
+  UseMethod("getTree")
 }
 
 #' @export
-get.TreePlus <- function(x, ...) {
-  UseMethod("get.TreePlus")
+getTreePlus <- function(x, ...) {
+  UseMethod("getTreePlus")
 }
 
 #' @export
-#' @method get.Tree rf
-get.Tree.rf <- function (rfobj, k = 1, labelVar = TRUE) {
+#' @method getTree rf
+getTree.rf <- function (rfobj, k = 1, labelVar = TRUE) {
   if (is.null(rfobj$forest)) {
     stop("No forest component in ", deparse(substitute(rfobj)))
   }
@@ -157,19 +157,19 @@ get.Tree.rf <- function (rfobj, k = 1, labelVar = TRUE) {
   }
   if (rfobj$type == "regression") {
     tree <- cbind(rfobj$forest$leftDaughter[, k], rfobj$forest$rightDaughter[,
-                                                                             k], rfobj$forest$bestvar[, k], rfobj$forest$xbestsplit[,
-                                                                                                                                    k], rfobj$forest$nodestatus[, k], rfobj$forest$nodepred[,
-                                                                                                                                                                                            k])[1:rfobj$forest$ndbigtree[k], ]
+      k], rfobj$forest$bestvar[, k], rfobj$forest$xbestsplit[,
+      k], rfobj$forest$nodestatus[, k], rfobj$forest$nodepred[,
+      k])[1:rfobj$forest$ndbigtree[k], ]
   }
   else {
     tree <- cbind(rfobj$forest$treemap[, , k], rfobj$forest$bestvar[,
-                                                                    k], rfobj$forest$xbestsplit[, k], rfobj$forest$nodestatus[,
-                                                                                                                              k], rfobj$forest$nodepred[, k])[1:rfobj$forest$ndbigtree[k],
-                                                                                                                              ]
+      k], rfobj$forest$xbestsplit[, k], rfobj$forest$nodestatus[,
+      k], rfobj$forest$nodepred[, k])[1:rfobj$forest$ndbigtree[k],
+      ]
   }
   dimnames(tree) <- list(1:nrow(tree), c("left daughter",
-                                         "right daughter", "split var", "split point", "status",
-                                         "prediction"))
+    "right daughter", "split var", "split point", "status",
+    "prediction"))
   if (labelVar) {
     tree <- as.data.frame(tree)
     v <- tree[[3]]
@@ -183,18 +183,17 @@ get.Tree.rf <- function (rfobj, k = 1, labelVar = TRUE) {
   }
   tree
 }
-
 #' @export
-#' @method get.TreePlus rf
-get.TreePlus.rf <- function(rf, data = NULL, idx = NULL) {
+#' @method getTreePlus rf
+getTreePlus.rf <- function(rf, data = NULL, idx = NULL) {
 
   if (!inherits(rf, "randomForest"))
-    stop("get.TreePlus(): rf must be a randomForest model created by rf().")
+    stop("getTreePlus(): rf must be a randomForest model created by rf().")
 
   all_ids <- seq_len(rf$ntree)
   if (is.null(idx)) idx <- all_ids else idx <- as.integer(idx)
   if (any(!(idx %in% all_ids)))
-    stop("get.TreePlus(): idx must be in 1:", rf$ntree)
+    stop("getTreePlus(): idx must be in 1:", rf$ntree)
 
   if (is.null(data)) {
     A <- perm_data(rf) # A is either an array or matrix
@@ -207,7 +206,7 @@ get.TreePlus.rf <- function(rf, data = NULL, idx = NULL) {
   for (j in seq_along(idx)) {
     k <- idx[j]
 
-    tree_k <- get.Tree(rf, k, labelVar = TRUE)
+    tree_k <- getTree(rf, k, labelVar = TRUE)
 
     if (is.matrix(A)) {
       Xk <- A
@@ -336,18 +335,18 @@ getPsi.rf <- function(rf, data = NULL, idx = NULL, ...) {
     data <- rf$training_data
   }
 
-  tp <- get.TreePlus(rf, idx = idx)
+  tp <- getTreePlus(rf, idx = idx)
 
   getPsi(tp, data = data, ...)
 }
 
 # model
 #' @export
-rfPlus <- function(rf, X, y) {
+rfPlus <- function(rf, X, y, alpha=0) {
   # weighted normal equations helper
-  .normal_eqs <- function(X, y, w) {
+  .normal_eqs <- function(X, y, w, alpha) {
     w <- as.numeric(w)
-    XtW  <- t(X) %*% (X * w)
+    XtW  <- t(X) %*% (X * w) + alpha*diag(nrow = ncol(X))
     XtWy <- t(X) %*% (y * w)
     solve(XtW, XtWy)
   }
@@ -376,7 +375,7 @@ rfPlus <- function(rf, X, y) {
   coef_list <- vector("list", ntree)
 
   # --- get treePlus objects for all trees ---------------------------------
-  tp_obj <- get.TreePlus(rf)  # all trees by default
+  tp_obj <- getTreePlus(rf)  # all trees by default
 
   # Ensure we always work with a list of treePlus objects
   if (!is.null(tp_obj$tree) && !is.null(tp_obj$data)) {
@@ -410,7 +409,7 @@ rfPlus <- function(rf, X, y) {
       Xd <- cbind(Intercept = 1, Psi_k)[inbag, , drop = FALSE]
       yd <- y[inbag]
       wd <- w[inbag]
-      coef_list[[k]] <- as.vector(.normal_eqs(Xd, yd, wd))
+      coef_list[[k]] <- as.vector(.normal_eqs(Xd, yd, wd, alpha))
     }
   }
 
