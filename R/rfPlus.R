@@ -342,74 +342,106 @@ getPsi.rf <- function(rf, data = NULL, idx = NULL, ...) {
 
 # model
 #' @export
-rfPlus <- function(rf, X, y, alpha=0) {
-  # weighted normal equations helper
-  .normal_eqs <- function(X, y, w, alpha) {
-    w <- as.numeric(w)
-    XtW  <- t(X) %*% (X * w) + alpha*diag(nrow = ncol(X))
-    XtWy <- t(X) %*% (y * w)
-    solve(XtW, XtWy)
+rfPlus <- function(rf, X = NULL, y = NULL, alpha = 0) {
+
+  # ---- Weighted ridge solver ---------------------------------------------
+  # Solves  (X'WX + alpha * D) beta = X'Wy
+  # where D is a diagonal mask: 1 = penalize, 0 = no penalty
+  # (used to leave the intercept unpenalized).
+  .normal_eqs <- function(X, y, w, alpha, penalize) {
+    w    <- as.numeric(w)
+    D    <- diag(as.numeric(penalize), nrow = ncol(X))
+    Gram <- t(X) %*% (X * w) + alpha * D     # X'WX + alpha * D
+    XtWy <- t(X) %*% (y * w)                 # X'Wy
+    beta <- tryCatch(
+      solve(Gram, XtWy),
+      error = function(e) {
+        stop(
+          "Per-tree ridge solve failed -- likely near-singular Psi'WPsi.\n",
+          "  alpha = ", alpha, " (consider a larger value).\n",
+          "  Underlying error: ", conditionMessage(e),
+          call. = FALSE
+        )
+      }
+    )
+    as.vector(beta)
   }
 
-  # --- basic checks -------------------------------------------------------
+  # ---- Input checks ------------------------------------------------------
   if (!inherits(rf, "randomForest"))
     stop("`rf` must be a randomForest object (e.g., created by rf()).")
-
   if (!is.null(rf$type) && rf$type != "regression")
     stop("This implementation supports regression random forests only.")
-
   if (is.null(rf$inbag))
     stop("`rf$inbag` is NULL. Fit the random forest with keep.inbag = TRUE (use rf()).")
 
+  # ---- Default X / y to the data stashed on the rf object ----------------
+  if (is.null(X)) {
+    if (is.null(rf$training_data))
+      stop("X not supplied and rf$training_data is missing. Pass X explicitly.")
+    X <- rf$training_data
+    # If training_data was stored with the response column, strip it.
+    fm <- rf$call$formula
+    if (!is.null(fm)) {
+      resp <- tryCatch(all.vars(stats::as.formula(fm))[1],
+                       error = function(e) NULL)
+      if (!is.null(resp) && resp %in% colnames(X))
+        X <- X[, setdiff(colnames(X), resp), drop = FALSE]
+    }
+  }
   X <- as.data.frame(X)
-  if (!is.numeric(y))
-    stop("`y` must be numeric for regression.")
 
-  if (length(y) != nrow(X))
-    stop("Length of y must match nrow(X).")
-
-  if (nrow(rf$inbag) != nrow(X))
-    stop("Number of rows in X must match number of rows used to fit `rf`.")
-
-  ntree <- rf$ntree
-  coef_list <- vector("list", ntree)
-
-  # --- get treePlus objects for all trees ---------------------------------
-  tp_obj <- getTreePlus(rf)  # all trees by default
-
-  # Ensure we always work with a list of treePlus objects
-  if (!is.null(tp_obj$tree) && !is.null(tp_obj$data)) {
-    # single treePlus object
-    tp_list <- list(tp_obj)
-    names(tp_list) <- "tree_1"
-  } else {
-    # already a list of treePlus objects
-    tp_list <- tp_obj
+  if (is.null(y)) {
+    if (is.null(rf$y))
+      stop("y not supplied and rf$y is missing. Pass y explicitly.")
+    y <- rf$y
   }
 
-  # --- per-tree OLS -------------------------------------------------------
+  if (!is.numeric(y))
+    stop("`y` must be numeric for regression.")
+  if (length(y) != nrow(X))
+    stop("length(y) (", length(y), ") must match nrow(X) (", nrow(X), ").")
+  if (nrow(rf$inbag) != nrow(X))
+    stop("nrow(X) (", nrow(X),
+         ") must match the data used to fit `rf` (", nrow(rf$inbag), ").")
+  if (!is.numeric(alpha) || length(alpha) != 1L || alpha < 0)
+    stop("`alpha` must be a single non-negative numeric value.")
+
+  ntree     <- rf$ntree
+  coef_list <- vector("list", ntree)
+
+  # ---- treePlus objects for all trees (NULL data => bootstrap NL/NR) -----
+  tp_obj <- getTreePlus(rf)
+
+  # Normalize to always be a list (handles the single-tree edge case)
+  tp_list <- if (!is.null(tp_obj$tree) && !is.null(tp_obj$data)) {
+    list(tree_1 = tp_obj)
+  } else {
+    tp_obj
+  }
+
+  # ---- Per-tree weighted ridge ------------------------------------------
   for (k in seq_len(ntree)) {
-    tp_k <- tp_list[[k]]
-
-    # Psi for tree k on the training X
+    tp_k  <- tp_list[[k]]
     Psi_k <- getPsi(tp_k, data = X)
-
-
-    w <- rf$inbag[, k]
+    w     <- rf$inbag[, k]
     inbag <- w > 0
 
+    if (!any(inbag))
+      stop("No in-bag observations for tree ", k, " (all zero in rf$inbag).")
+
     if (ncol(Psi_k) == 0L) {
-
-      if (!any(inbag))
-        stop("No in-bag observations for tree ", k, " (all zero in `rf$inbag`).")
-
+      # Stump-less tree: just the weighted mean of y on the in-bag rows
       mu <- sum(w[inbag] * y[inbag]) / sum(w[inbag])
-      coef_list[[k]] <- c(mu)
+      coef_list[[k]] <- c(Intercept = mu)
     } else {
-      Xd <- cbind(Intercept = 1, Psi_k)[inbag, , drop = FALSE]
-      yd <- y[inbag]
-      wd <- w[inbag]
-      coef_list[[k]] <- as.vector(.normal_eqs(Xd, yd, wd, alpha))
+      Xd       <- cbind(Intercept = 1, Psi_k)[inbag, , drop = FALSE]
+      yd       <- y[inbag]
+      wd       <- w[inbag]
+      penalize <- c(FALSE, rep(TRUE, ncol(Psi_k)))   # intercept unpenalized
+      beta     <- .normal_eqs(Xd, yd, wd, alpha, penalize)
+      names(beta)    <- colnames(Xd)
+      coef_list[[k]] <- beta
     }
   }
 
@@ -418,6 +450,7 @@ rfPlus <- function(rf, X, y, alpha=0) {
       rf            = rf,
       X             = X,
       y             = y,
+      alpha         = alpha,
       ntree         = ntree,
       feature_names = colnames(X),
       tree_info     = tp_list,
