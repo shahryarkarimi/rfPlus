@@ -342,7 +342,6 @@ getPsi.rf <- function(rf, data = NULL, idx = NULL, ...) {
 
 # model
 #' @export
-#' @export
 rfPlus <- function(rf, X = NULL, y = NULL, lambda = 0, alpha = 0) {
 
   # ---- Internal solvers --------------------------------------------------
