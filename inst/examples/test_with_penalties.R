@@ -7,9 +7,11 @@ x2 <- runif(n)
 y <- sin(2 * pi * x1) + 0.5 * x2 + rnorm(n, sd = 0.2)
 d <- data.frame(y, x1, x2)
 head(d, 10)
-scatterplot3d(x = x1, y = x2, z = y,
-              xlab = "x1", ylab = "x2", zlab = "y",
-              pch = 16, color = "blue")
+scatterplot3d(
+  x = x1, y = x2, z = y,
+  xlab = "x1", ylab = "x2", zlab = "y",
+  pch = 16, color = "blue"
+)
 fit_rf <- rf(y ~ ., data = d, ntree = 50)
 yhat_rf <- predict(fit_rf, newdata = d)
 head(yhat_rf)
@@ -21,28 +23,30 @@ max(abs(predict(fit_a1, newdata = d) - yhat_rf))
 # lambdas
 lambdas <- c(0, 0.01, 0.1, 1, 10, 100, 1000)
 # ridge
-summary_ridge <- data.frame(); fit_ridge <- list()
+summary_ridge <- data.frame()
+fit_ridge <- list()
 yhat_ridge <- matrix(0, nr = length(y), nc = length(lambdas))
 cf_ridge <- NULL
 for (i in 1:length(lambdas)) {
   fit_ridge[[i]] <- rfPlus(fit_rf, lambda = lambdas[i], alpha = 0)
   yhat_ridge[, i] <- predict(fit_ridge[[i]], newdata = d)
   cf_ridge <- cbind(cf_ridge, coef(fit_ridge[[i]], trees = 50)[[1]])
-summary_ridge <- rbind(
-  summary_ridge,
-  data.frame(
-    lambda = lambdas[i],
-    intercept = cf_ridge[1, i],
-    psi_norm = sqrt(sum(cf_ridge[-1, i]^2)),
-    nonzero = sum(cf_ridge[-1, i] != 0),
-    pred_sd = sd(yhat_ridge[, i]),
-    diff_rf = max(abs(yhat_ridge[, i] - yhat_rf))
+  summary_ridge <- rbind(
+    summary_ridge,
+    data.frame(
+      lambda = lambdas[i],
+      intercept = cf_ridge[1, i],
+      psi_norm = sqrt(sum(cf_ridge[-1, i]^2)),
+      nonzero = sum(cf_ridge[-1, i] != 0),
+      pred_sd = sd(yhat_ridge[, i]),
+      diff_rf = max(abs(yhat_ridge[, i] - yhat_rf))
+    )
   )
-)
 }
 print(summary_ridge, row.names = FALSE)
 # lasso
-summary_lasso <- data.frame(); fit_lasso <- list()
+summary_lasso <- data.frame()
+fit_lasso <- list()
 yhat_lasso <- matrix(0, nr = length(y), nc = length(lambdas))
 cf_lasso <- NULL
 for (i in 1:length(lambdas)) {
