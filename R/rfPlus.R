@@ -342,29 +342,118 @@ getPsi.rf <- function(rf, data = NULL, idx = NULL, ...) {
 
 # model
 #' @export
-rfPlus <- function(rf, X = NULL, y = NULL, alpha = 0) {
+#' @export
+rfPlus <- function(rf, X = NULL, y = NULL, lambda = 0, alpha = 0) {
 
-  # ---- Weighted ridge solver ---------------------------------------------
-  # Solves  (X'WX + alpha * D) beta = X'Wy
-  # where D is a diagonal mask: 1 = penalize, 0 = no penalty
-  # (used to leave the intercept unpenalized).
-  .normal_eqs <- function(X, y, w, alpha, penalize) {
+  # ---- Internal solvers --------------------------------------------------
+
+  # Closed-form weighted ridge in glmnet's lambda scale.
+  # Solves  (X'WX + lambda * N_w * D) beta = X'Wy,
+  # where N_w = sum(w) and D is a diagonal mask (1 = penalize, 0 = leave alone).
+  # Used when alpha = 0 (any lambda) or when lambda = 0 (any alpha, = OLS).
+  .ridge_solve <- function(X, y, w, lambda, penalize) {
     w    <- as.numeric(w)
+    N_w  <- sum(w)
     D    <- diag(as.numeric(penalize), nrow = ncol(X))
-    Gram <- t(X) %*% (X * w) + alpha * D     # X'WX + alpha * D
-    XtWy <- t(X) %*% (y * w)                 # X'Wy
+    Gram <- t(X) %*% (X * w) + lambda * N_w * D
+    XtWy <- t(X) %*% (y * w)
     beta <- tryCatch(
       solve(Gram, XtWy),
       error = function(e) {
         stop(
           "Per-tree ridge solve failed -- likely near-singular Psi'WPsi.\n",
-          "  alpha = ", alpha, " (consider a larger value).\n",
+          "  lambda = ", lambda, " (consider a larger value).\n",
           "  Underlying error: ", conditionMessage(e),
           call. = FALSE
         )
       }
     )
     as.vector(beta)
+  }
+
+  # Coordinate descent for weighted elastic net with unpenalized intercept.
+  # Objective (matches glmnet's parameterization):
+  #   (1 / (2 N_w)) * sum_i w_i (y_i - b0 - x_i' b)^2
+  #     + lambda * [ (1 - alpha)/2 * ||b||_2^2  +  alpha * ||b||_1 ]
+  #
+  # Per-coordinate update (with partial residual r^(j) = y - b0 - X b + X_j b_j):
+  #   z_j     = (1/N_w) * sum_i w_i * X_ij * r_i^(j)
+  #   v_j     = (1/N_w) * sum_i w_i * X_ij^2
+  #   b_j_new = soft(z_j, lambda * alpha) / ( v_j + lambda * (1 - alpha) )
+  # where soft(z, g) = sign(z) * max(|z| - g, 0).
+  #
+  # Intercept update (unpenalized): b0 += (1/N_w) * sum_i w_i r_i.
+  # Returns c(intercept, slopes) as a plain numeric vector.
+  .enet_solve <- function(X, y, w, lambda, alpha) {
+
+    max_iter <- 1000L
+    tol      <- 1e-7
+
+    X   <- as.matrix(X)
+    n   <- nrow(X)
+    p   <- ncol(X)
+    w   <- as.numeric(w)
+    N_w <- sum(w)
+
+    # Precompute weighted column scales v_j once.
+    v <- colSums(w * X * X) / N_w
+
+    # Soft-thresholding operator.
+    soft <- function(z, g) sign(z) * max(abs(z) - g, 0)
+
+    # L1 threshold and L2 shrinkage factor (same across coordinates).
+    g_l1 <- lambda * alpha
+    g_l2 <- lambda * (1 - alpha)
+
+    # Initialize: intercept = weighted mean of y, all slopes zero.
+    b0 <- sum(w * y) / N_w
+    b  <- numeric(p)
+    r  <- y - b0          # current residuals (b = 0 initially)
+
+    converged <- FALSE
+    for (iter in seq_len(max_iter)) {
+      max_delta <- 0
+
+      # ---- Coordinate sweep over the slope coefficients ------------------
+      for (j in seq_len(p)) {
+        if (v[j] == 0) next            # dead column, leave b_j = 0
+
+        # Add current b_j * X[, j] back to residuals -> partial residual.
+        r_partial <- r + X[, j] * b[j]
+
+        # Weighted partial covariance with column j.
+        z_j <- sum(w * X[, j] * r_partial) / N_w
+
+        # Soft-thresholded, ridge-shrunk update.
+        new_bj <- soft(z_j, g_l1) / (v[j] + g_l2)
+
+        delta <- new_bj - b[j]
+        if (delta != 0) {
+          # Restore residuals using the new b_j.
+          r         <- r_partial - X[, j] * new_bj
+          b[j]      <- new_bj
+          max_delta <- max(max_delta, abs(delta))
+        }
+      }
+
+      # ---- Intercept update (unpenalized; equiv. weighted mean of r) ----
+      shift <- sum(w * r) / N_w
+      if (shift != 0) {
+        b0        <- b0 + shift
+        r         <- r - shift
+        max_delta <- max(max_delta, abs(shift))
+      }
+
+      if (max_delta < tol) { converged <- TRUE; break }
+    }
+
+    if (!converged) {
+      warning("Elastic-net coordinate descent did not converge in ",
+              max_iter, " iterations (max_delta = ",
+              signif(max_delta, 3), ").", call. = FALSE)
+    }
+
+    c(b0, b)
   }
 
   # ---- Input checks ------------------------------------------------------
@@ -374,13 +463,16 @@ rfPlus <- function(rf, X = NULL, y = NULL, alpha = 0) {
     stop("This implementation supports regression random forests only.")
   if (is.null(rf$inbag))
     stop("`rf$inbag` is NULL. Fit the random forest with keep.inbag = TRUE (use rf()).")
+  if (!is.numeric(lambda) || length(lambda) != 1L || lambda < 0)
+    stop("`lambda` must be a single non-negative numeric value.")
+  if (!is.numeric(alpha) || length(alpha) != 1L || alpha < 0 || alpha > 1)
+    stop("`alpha` must be a single numeric value in [0, 1] (0 = ridge, 1 = lasso).")
 
   # ---- Default X / y to the data stashed on the rf object ----------------
   if (is.null(X)) {
     if (is.null(rf$training_data))
       stop("X not supplied and rf$training_data is missing. Pass X explicitly.")
     X <- rf$training_data
-    # If training_data was stored with the response column, strip it.
     fm <- rf$call$formula
     if (!is.null(fm)) {
       resp <- tryCatch(all.vars(stats::as.formula(fm))[1],
@@ -396,7 +488,6 @@ rfPlus <- function(rf, X = NULL, y = NULL, alpha = 0) {
       stop("y not supplied and rf$y is missing. Pass y explicitly.")
     y <- rf$y
   }
-
   if (!is.numeric(y))
     stop("`y` must be numeric for regression.")
   if (length(y) != nrow(X))
@@ -404,23 +495,24 @@ rfPlus <- function(rf, X = NULL, y = NULL, alpha = 0) {
   if (nrow(rf$inbag) != nrow(X))
     stop("nrow(X) (", nrow(X),
          ") must match the data used to fit `rf` (", nrow(rf$inbag), ").")
-  if (!is.numeric(alpha) || length(alpha) != 1L || alpha < 0)
-    stop("`alpha` must be a single non-negative numeric value.")
 
   ntree     <- rf$ntree
   coef_list <- vector("list", ntree)
 
   # ---- treePlus objects for all trees (NULL data => bootstrap NL/NR) -----
-  tp_obj <- getTreePlus(rf)
-
-  # Normalize to always be a list (handles the single-tree edge case)
+  tp_obj  <- getTreePlus(rf)
   tp_list <- if (!is.null(tp_obj$tree) && !is.null(tp_obj$data)) {
     list(tree_1 = tp_obj)
   } else {
     tp_obj
   }
 
-  # ---- Per-tree weighted ridge ------------------------------------------
+  # ---- Solver dispatch ---------------------------------------------------
+  # Closed form covers: lambda = 0 (OLS, any alpha) and alpha = 0 (ridge, any lambda).
+  # All other cases (alpha > 0 AND lambda > 0) use hand-coded coordinate descent.
+  use_closed_form <- (alpha == 0) || (lambda == 0)
+
+  # ---- Per-tree fit ------------------------------------------------------
   for (k in seq_len(ntree)) {
     tp_k  <- tp_list[[k]]
     Psi_k <- getPsi(tp_k, data = X)
@@ -431,18 +523,27 @@ rfPlus <- function(rf, X = NULL, y = NULL, alpha = 0) {
       stop("No in-bag observations for tree ", k, " (all zero in rf$inbag).")
 
     if (ncol(Psi_k) == 0L) {
-      # Stump-less tree: just the weighted mean of y on the in-bag rows
+      # Stump-less tree: weighted mean of y on the in-bag rows.
       mu <- sum(w[inbag] * y[inbag]) / sum(w[inbag])
       coef_list[[k]] <- c(Intercept = mu)
-    } else {
-      Xd       <- cbind(Intercept = 1, Psi_k)[inbag, , drop = FALSE]
-      yd       <- y[inbag]
-      wd       <- w[inbag]
-      penalize <- c(FALSE, rep(TRUE, ncol(Psi_k)))   # intercept unpenalized
-      beta     <- .normal_eqs(Xd, yd, wd, alpha, penalize)
-      names(beta)    <- colnames(Xd)
-      coef_list[[k]] <- beta
+      next
     }
+
+    yd    <- y[inbag]
+    wd    <- w[inbag]
+    Psi_d <- Psi_k[inbag, , drop = FALSE]
+
+    if (use_closed_form) {
+      Xd       <- cbind(Intercept = 1, Psi_d)
+      penalize <- c(FALSE, rep(TRUE, ncol(Psi_d)))
+      beta     <- .ridge_solve(Xd, yd, wd, lambda, penalize)
+      names(beta) <- colnames(Xd)
+    } else {
+      beta        <- .enet_solve(Psi_d, yd, wd, lambda = lambda, alpha = alpha)
+      names(beta) <- c("Intercept", colnames(Psi_d))
+    }
+
+    coef_list[[k]] <- beta
   }
 
   structure(
@@ -450,6 +551,7 @@ rfPlus <- function(rf, X = NULL, y = NULL, alpha = 0) {
       rf            = rf,
       X             = X,
       y             = y,
+      lambda        = lambda,
       alpha         = alpha,
       ntree         = ntree,
       feature_names = colnames(X),
@@ -463,9 +565,18 @@ rfPlus <- function(rf, X = NULL, y = NULL, alpha = 0) {
 
 #' @export
 print.rfPlus <- function(rfPlus, ...) {
-  cat("RfPlus model\n")
-  cat("number of trees:", rfPlus$ntree, "\n")
-  cat("features:", paste(rfPlus$feature_names, collapse = ", "), "\n")
+  pen_label <- if (rfPlus$alpha == 0) {
+    "ridge"
+  } else if (rfPlus$alpha == 1) {
+    "lasso"
+  } else {
+    paste0("elastic net (alpha = ", rfPlus$alpha, ")")
+  }
+  cat("rfPlus model\n")
+  cat("  penalty:        ", pen_label, "\n", sep = "")
+  cat("  lambda:         ", rfPlus$lambda, "\n", sep = "")
+  cat("  number of trees:", rfPlus$ntree, "\n")
+  cat("  features:       ", paste(rfPlus$feature_names, collapse = ", "), "\n")
   invisible(rfPlus)
 }
 
@@ -506,10 +617,7 @@ predict.rfPlus <- function(rfPlus, newdata = NULL, trees = NULL, ...) {
     k <- trees[j]
 
     tree_k <- rfPlus$tree_info[[k]]
-
-    # updated: use getPsi(), not build_Psi()
-    Psi_k <- getPsi(tree_k, data = newdata)
-
+    Psi_k  <- getPsi(tree_k, data = newdata)
     coef_k <- rfPlus$coef_list[[k]]
 
     if (ncol(Psi_k) == 0L) {
